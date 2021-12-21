@@ -7,7 +7,7 @@
 
 #include <x86intrin.h>
 
-namespace incremementer {
+namespace incrementer {
 	namespace {
 		static inline uint64_t RDTSC_START(void)
 		{
@@ -91,13 +91,82 @@ namespace incremementer {
 		private:
 			alignas(64) std::uint64_t value {};
 		};
+
+		class test_runner {
+		public:
+			void run(std::uint64_t participants, bool responsible = false)
+			{
+				constexpr auto total_increments = 1ull << 24;
+				const auto target = total_increments / participants;
+				synchronize(
+					participants,
+					[this, target] { return spinlock.run(target); },
+					responsible);
+
+				synchronize(
+					participants,
+					[this, target] { return atomic.run(target); },
+					responsible);
+
+				synchronize(
+					participants,
+					[this, target] { return null.run(target); },
+					responsible);
+			}
+
+		private:
+			std::atomic_uint64_t ready {};
+			std::atomic_uint64_t done {};
+			std::atomic_bool start {};
+			spinlock_test spinlock;
+			atomic_test atomic;
+			null_test null;
+
+			template <typename test_task>
+			void synchronize(std::uint64_t participants, test_task&& run_test, bool responsible)
+			{
+				++ready;
+				if (responsible) {
+					while (ready < participants)
+						_mm_pause();
+
+					ready = 0;
+					start = true;
+				}
+
+				while (!start)
+					_mm_pause();
+
+				run_test();
+
+				++done;
+				if (responsible) {
+					while (done < participants)
+						_mm_pause();
+
+					start = false;
+					done = 0;
+				}
+
+				while (start)
+					_mm_pause();
+			}
+		};
 	}
 }
 
 int main()
 {
+	using namespace incrementer;
+
 	const auto core_count = std::thread::hardware_concurrency();
 	std::vector<std::thread> threads(core_count - 1);
+
+	test_runner runner {};
+	for (auto& thread : threads)
+		thread = std::thread {[&runner, core_count] { runner.run(core_count); }};
+
+	runner.run(core_count, true);
 
 	for (auto& thread : threads)
 		thread.join();
