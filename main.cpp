@@ -1,7 +1,9 @@
 #include <atomic>
+#include <cassert>
 #include <cstdint>
 #include <iostream>
 #include <mutex>
+#include <numeric>
 #include <thread>
 #include <vector>
 
@@ -63,6 +65,8 @@ namespace incrementer {
 				}
 			}
 
+			void check(std::uint64_t n) { assert(n == value); }
+
 		private:
 			alignas(64) std::uint64_t value {};
 			spinlock lock;
@@ -72,9 +76,15 @@ namespace incrementer {
 		public:
 			void run(std::uint64_t per_thread)
 			{
-				for (auto i = 0ull; i < per_thread; ++i)
-					value.fetch_add(1);
+				// CAS
+				for (auto i = 0ull; i < per_thread; ++i) {
+					auto old = value.load(std::memory_order::memory_order_relaxed);
+					while (value.compare_exchange_strong(old, old + 1, std::memory_order::memory_order_relaxed))
+						_mm_pause();
+				}
 			}
+
+			void check(std::uint64_t n) { assert(n == value); }
 
 		private:
 			alignas(64) std::atomic_uint64_t value {};
@@ -88,30 +98,51 @@ namespace incrementer {
 					++value;
 			}
 
+			void check(std::uint64_t n) { assert(n == value); }
+
 		private:
-			alignas(64) std::uint64_t value {};
+			alignas(64) volatile std::uint64_t value {}; // clunky
 		};
+
+		struct timings {
+			std::uint64_t spinlock;
+			std::uint64_t atomic;
+			std::uint64_t null;
+		};
+
+		timings operator+(const timings& a, const timings& b)
+		{
+			return {a.spinlock + b.spinlock, a.atomic + b.atomic, a.null + b.null};
+		}
+
+		constexpr auto total_increments = 1ull << 24;
 
 		class test_runner {
 		public:
-			void run(std::uint64_t participants, bool responsible = false)
+			timings run(std::uint64_t participants, bool responsible = false)
 			{
-				constexpr auto total_increments = 1ull << 24;
 				const auto target = total_increments / participants;
-				synchronize(
+				const auto real_total = target * participants;
+				const auto sl_time = synchronize(
 					participants,
 					[this, target] { return spinlock.run(target); },
 					responsible);
 
-				synchronize(
+				const auto at_time = synchronize(
 					participants,
 					[this, target] { return atomic.run(target); },
 					responsible);
 
-				synchronize(
+				const auto nl_time = synchronize(
 					participants,
 					[this, target] { return null.run(target); },
 					responsible);
+
+				spinlock.check(real_total);
+				atomic.check(real_total);
+				null.check(real_total);
+
+				return {sl_time, at_time, nl_time};
 			}
 
 		private:
@@ -123,7 +154,7 @@ namespace incrementer {
 			null_test null;
 
 			template <typename test_task>
-			void synchronize(std::uint64_t participants, test_task&& run_test, bool responsible)
+			std::uint64_t synchronize(std::uint64_t participants, test_task&& run_test, bool responsible)
 			{
 				++ready;
 				if (responsible) {
@@ -137,7 +168,9 @@ namespace incrementer {
 				while (!start)
 					_mm_pause();
 
+				const auto start_time = RDTSC_START();
 				run_test();
+				const auto stop_time = RDTSCP();
 
 				++done;
 				if (responsible) {
@@ -150,6 +183,8 @@ namespace incrementer {
 
 				while (start)
 					_mm_pause();
+
+				return stop_time - start_time;
 			}
 		};
 	}
@@ -161,12 +196,21 @@ int main()
 
 	const auto core_count = std::thread::hardware_concurrency();
 	std::vector<std::thread> threads(core_count - 1);
+	std::vector<timings> times(core_count);
 
 	test_runner runner {};
+	auto id = 1u;
 	for (auto& thread : threads)
-		thread = std::thread {[&runner, core_count] { runner.run(core_count); }};
+		thread = std::thread {[&runner, &time = times[id++], core_count] { time = runner.run(core_count); }};
 
-	runner.run(core_count, true);
+	times.front() = runner.run(core_count, true);
+	const auto totals = std::accumulate(times.begin(), times.end(), timings {});
+	std::cout << "Spinlock took " << totals.spinlock << " cycles\n";
+	std::cout << "Atomic took " << totals.atomic << " cycles\n";
+	std::cout << "Null took " << totals.null << " cycles\n";
+	std::cout << "Average spinlock: " << static_cast<double>(totals.spinlock) / total_increments << "\n";
+	std::cout << "Average atomic: " << static_cast<double>(totals.atomic) / total_increments << "\n";
+	std::cout << "Average null: " << static_cast<double>(totals.null) / total_increments << "\n";
 
 	for (auto& thread : threads)
 		thread.join();
