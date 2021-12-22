@@ -9,8 +9,12 @@
 
 #include <x86intrin.h>
 
+#include "zipf.h"
+
 namespace incrementer {
 	namespace {
+		constexpr auto cacheline_count = 1ull << 16;
+
 		static inline uint64_t RDTSC_START(void)
 		{
 			unsigned cycles_low, cycles_high;
@@ -57,8 +61,15 @@ namespace incrementer {
 
 		class spinlock_test {
 		public:
+			struct alignas(64) line {
+				std::uint64_t value;
+			};
+
+			spinlock_test() : values(cacheline_count) {}
+
 			void run(std::uint64_t per_thread)
 			{
+				auto& value = values.front().value;
 				for (auto i = 0ull; i < per_thread; ++i) {
 					const std::unique_lock guard {lock};
 					++value;
@@ -68,15 +79,21 @@ namespace incrementer {
 			void check(std::uint64_t n) { assert(n == value); }
 
 		private:
-			alignas(64) std::uint64_t value {};
+			std::vector<line> values;
 			spinlock lock;
 		};
 
 		class atomic_test {
 		public:
+			struct alignas(64) line {
+				std::atomic_uint64_t value;
+			};
+
+			atomic_test() : values(cacheline_count) {}
+
 			void run(std::uint64_t per_thread)
 			{
-				// CAS
+				auto& value = values.front().value;
 				for (auto i = 0ull; i < per_thread; ++i) {
 					auto old = value.load(std::memory_order::memory_order_relaxed);
 					while (value.compare_exchange_strong(old, old + 1, std::memory_order::memory_order_relaxed))
@@ -87,13 +104,20 @@ namespace incrementer {
 			void check(std::uint64_t n) { assert(n == value); }
 
 		private:
-			alignas(64) std::atomic_uint64_t value {};
+			std::vector<line> values;
 		};
 
 		class null_test {
 		public:
+			struct alignas(64) line {
+				volatile std::uint64_t value;
+			};
+
+			null_test() : values(cacheline_count) {}
+
 			void run(std::uint64_t per_thread)
 			{
+				auto& value = values.front().value;
 				for (auto i = 0ull; i < per_thread; ++i)
 					++value;
 			}
@@ -101,7 +125,7 @@ namespace incrementer {
 			void check(std::uint64_t n) { assert(n == value); }
 
 		private:
-			alignas(64) volatile std::uint64_t value {}; // clunky
+			std::vector<line> values; // clunky
 		};
 
 		struct timings {
