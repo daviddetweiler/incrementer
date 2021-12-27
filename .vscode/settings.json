@@ -43,6 +43,12 @@
 		"utility": "cpp",
 		"deque": "cpp",
 		"functional": "cpp",
-		"numeric": "cpp"
+		"numeric": "cpp",
+		"cstdarg": "cpp",
+		"cstddef": "cpp",
+		"algorithm": "cpp",
+		"iterator": "cpp",
+		"memory_resource": "cpp",
+		"random": "cpp"
 	}
 }

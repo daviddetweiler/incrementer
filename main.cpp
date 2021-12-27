@@ -13,7 +13,9 @@
 
 namespace incrementer {
 	namespace {
+		constexpr auto total_increments = 1ull << 28;
 		constexpr auto cacheline_count = 1ull << 16;
+		constexpr auto keyrange = cacheline_count; // 64ull * (1ull << 26);
 
 		static inline uint64_t RDTSC_START(void)
 		{
@@ -65,22 +67,21 @@ namespace incrementer {
 				std::uint64_t value;
 			};
 
-			spinlock_test() : values(cacheline_count) {}
+			spinlock_test() : values(cacheline_count), locks(cacheline_count) {}
 
-			void run(std::uint64_t per_thread)
+			void run(std::uint64_t per_thread, std::vector<std::uint64_t>& indexes)
 			{
-				auto& value = values.front().value;
 				for (auto i = 0ull; i < per_thread; ++i) {
+					auto& value = values.at(indexes[i]).value;
+					auto& lock = locks.at(indexes[i]);
 					const std::unique_lock guard {lock};
 					++value;
 				}
 			}
 
-			void check(std::uint64_t n) { assert(n == value); }
-
 		private:
 			std::vector<line> values;
-			spinlock lock;
+			std::vector<spinlock> locks;
 		};
 
 		class atomic_test {
@@ -91,17 +92,15 @@ namespace incrementer {
 
 			atomic_test() : values(cacheline_count) {}
 
-			void run(std::uint64_t per_thread)
+			void run(std::uint64_t per_thread, std::vector<std::uint64_t>& indexes)
 			{
-				auto& value = values.front().value;
 				for (auto i = 0ull; i < per_thread; ++i) {
+					auto& value = values.at(indexes[i]).value;
 					auto old = value.load(std::memory_order::memory_order_relaxed);
 					while (value.compare_exchange_strong(old, old + 1, std::memory_order::memory_order_relaxed))
 						_mm_pause();
 				}
 			}
-
-			void check(std::uint64_t n) { assert(n == value); }
 
 		private:
 			std::vector<line> values;
@@ -115,14 +114,13 @@ namespace incrementer {
 
 			null_test() : values(cacheline_count) {}
 
-			void run(std::uint64_t per_thread)
+			void run(std::uint64_t per_thread, std::vector<std::uint64_t>& indexes)
 			{
-				auto& value = values.front().value;
-				for (auto i = 0ull; i < per_thread; ++i)
+				for (auto i = 0ull; i < per_thread; ++i) {
+					auto& value = values.at(indexes[i]).value;
 					++value;
+				}
 			}
-
-			void check(std::uint64_t n) { assert(n == value); }
 
 		private:
 			std::vector<line> values; // clunky
@@ -139,40 +137,53 @@ namespace incrementer {
 			return {a.spinlock + b.spinlock, a.atomic + b.atomic, a.null + b.null};
 		}
 
-		constexpr auto total_increments = 1ull << 24;
-
 		class test_runner {
 		public:
-			timings run(std::uint64_t participants, bool responsible = false)
+			test_runner(double skew, unsigned int participants) :
+				skew {skew},
+				participants {participants},
+				ready {},
+				done {},
+				start {},
+				spinlock {},
+				atomic {},
+				null {}
 			{
+			}
+
+			timings run(unsigned int id)
+			{
+				const auto responsible = id == 0;
 				const auto target = total_increments / participants;
-				const auto real_total = target * participants;
+				std::vector<std::uint64_t> indexes(target);
+				zipf_distribution dist {skew, keyrange, id};
+				for (auto& n : indexes)
+					n = dist();
+
 				const auto sl_time = synchronize(
 					participants,
-					[this, target] { return spinlock.run(target); },
+					[this, target, &indexes] { return spinlock.run(target, indexes); },
 					responsible);
 
 				const auto at_time = synchronize(
 					participants,
-					[this, target] { return atomic.run(target); },
+					[this, target, &indexes] { return atomic.run(target, indexes); },
 					responsible);
 
 				const auto nl_time = synchronize(
 					participants,
-					[this, target] { return null.run(target); },
+					[this, target, &indexes] { return null.run(target, indexes); },
 					responsible);
-
-				spinlock.check(real_total);
-				atomic.check(real_total);
-				null.check(real_total);
 
 				return {sl_time, at_time, nl_time};
 			}
 
 		private:
-			std::atomic_uint64_t ready {};
-			std::atomic_uint64_t done {};
-			std::atomic_bool start {};
+			const double skew;
+			const unsigned int participants;
+			std::atomic_uint64_t ready;
+			std::atomic_uint64_t done;
+			std::atomic_bool start;
 			spinlock_test spinlock;
 			atomic_test atomic;
 			null_test null;
@@ -211,6 +222,44 @@ namespace incrementer {
 				return stop_time - start_time;
 			}
 		};
+
+		struct averages {
+			double spinlock;
+			double atomic;
+			double null;
+		};
+
+		averages run_test(double skew)
+		{
+			static const auto core_count = std::thread::hardware_concurrency();
+			std::vector<std::thread> threads(core_count - 1);
+			std::vector<timings> times(core_count);
+
+			test_runner runner {skew, core_count};
+			auto id = 1u;
+			for (auto& thread : threads)
+				thread = std::thread {[&runner, &time = times[id++], id] { time = runner.run(id); }};
+
+			times.front() = runner.run(0);
+
+			for (auto& thread : threads)
+				thread.join();
+
+			const auto totals = std::accumulate(times.begin(), times.end(), timings {});
+			const averages avg
+				= {static_cast<double>(totals.spinlock) / total_increments,
+				   static_cast<double>(totals.atomic) / total_increments,
+				   static_cast<double>(totals.null) / total_increments};
+
+			// std::cout << "Spinlock took " << totals.spinlock << " cycles\n";
+			// std::cout << "Atomic took " << totals.atomic << " cycles\n";
+			// std::cout << "Null took " << totals.null << " cycles\n";
+			// std::cout << "Average spinlock: " << avg.spinlock << "\n";
+			// std::cout << "Average atomic: " << avg.atomic << "\n";
+			// std::cout << "Average null: " << avg.null << "\n";
+
+			return avg;
+		}
 	}
 }
 
@@ -218,24 +267,18 @@ int main()
 {
 	using namespace incrementer;
 
-	const auto core_count = std::thread::hardware_concurrency();
-	std::vector<std::thread> threads(core_count - 1);
-	std::vector<timings> times(core_count);
+	auto first = true;
+	std::cout << "{\n";
+	for (auto i = 0.0; i < 0.99; i += 0.05) {
+		if (!first)
+			std::cout << "," << std::endl;
 
-	test_runner runner {};
-	auto id = 1u;
-	for (auto& thread : threads)
-		thread = std::thread {[&runner, &time = times[id++], core_count] { time = runner.run(core_count); }};
+		const auto avg = run_test(i);
+		std::cout << "\t" << i << ": "
+				  << "[" << avg.spinlock << ", " << avg.atomic << ", " << avg.null << "]";
 
-	times.front() = runner.run(core_count, true);
-	const auto totals = std::accumulate(times.begin(), times.end(), timings {});
-	std::cout << "Spinlock took " << totals.spinlock << " cycles\n";
-	std::cout << "Atomic took " << totals.atomic << " cycles\n";
-	std::cout << "Null took " << totals.null << " cycles\n";
-	std::cout << "Average spinlock: " << static_cast<double>(totals.spinlock) / total_increments << "\n";
-	std::cout << "Average atomic: " << static_cast<double>(totals.atomic) / total_increments << "\n";
-	std::cout << "Average null: " << static_cast<double>(totals.null) / total_increments << "\n";
+		first = false;
+	}
 
-	for (auto& thread : threads)
-		thread.join();
+	std::cout << "}\n";
 }

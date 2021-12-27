@@ -5,7 +5,6 @@
 #include <cstdint>
 #include <limits>
 
-namespace kmercounter {
 #include <math.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -13,6 +12,8 @@ namespace kmercounter {
 #include <string.h>
 
 #include <cassert>
+
+namespace incrementer {
 
 struct zipf_gen_state {
   uint64_t n;    // number of items (input)
@@ -188,7 +189,7 @@ static void mehcached_test_zipf(double theta) {
 class zipf_distribution {
  public:
   zipf_distribution(double skew, std::uint64_t maximum, unsigned int seed) {
-    mehcached_zipf_init(&state, maximum, skew, seed);
+    mehcached_zipf_init(&state, maximum, skew, _mm_crc32_u32(0xffffffff, seed));
   }
 
   std::uint64_t operator()() { return mehcached_zipf_next(&state); }
