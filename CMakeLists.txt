@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.10)
 
-project(incrementer)
+project(incrementer C CXX ASM)
 
 find_package(Threads REQUIRED)
 
@@ -11,6 +11,6 @@ add_compile_options(
     -fcf-protection=none
 )
 
-add_executable(test main.cpp)
+add_executable(test main.cpp null_test.s atomic_test.s lock_test.s spin_lock.s)
 target_link_libraries(test Threads::Threads)
 set_property(TARGET test PROPERTY CXX_STANDARD 17)

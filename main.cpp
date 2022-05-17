@@ -17,6 +17,16 @@ namespace incrementer {
 		constexpr auto cacheline_count = 1ull << 16;
 		constexpr auto keyrange = cacheline_count; // 64ull * (1ull << 26);
 
+		struct alignas(64) line {
+			volatile std::uint64_t value;
+		};
+
+		extern "C" std::uint64_t run_null_test(std::uint64_t iterations, line* values, const std::uint64_t* indices);
+		extern "C" std::uint64_t run_atomic_test(std::uint64_t iterations, line* values, const std::uint64_t* indices);
+		
+		extern "C" std::uint64_t
+		run_lock_test(std::uint64_t iterations, line* values, const std::uint64_t* indices, line* locks);
+
 		static inline uint64_t RDTSC_START(void)
 		{
 			unsigned cycles_low, cycles_high;
@@ -49,13 +59,13 @@ namespace incrementer {
 
 		class alignas(64) spinlock {
 		public:
-			void lock()
+			void __attribute__((noinline)) lock()
 			{
 				while (!is_taken.test_and_set(std::memory_order_acquire))
 					_mm_pause();
 			}
 
-			void unlock() { is_taken.clear(std::memory_order_release); }
+			void __attribute__((noinline)) unlock() { is_taken.clear(std::memory_order_release); }
 
 		private:
 			std::atomic_flag is_taken {ATOMIC_FLAG_INIT};
@@ -63,43 +73,25 @@ namespace incrementer {
 
 		class spinlock_test {
 		public:
-			struct alignas(64) line {
-				std::uint64_t value;
-			};
-
 			spinlock_test() : values(cacheline_count), locks(cacheline_count) {}
 
 			void run(std::uint64_t per_thread, std::vector<std::uint64_t>& indexes)
 			{
-				for (auto i = 0ull; i < per_thread; ++i) {
-					auto& value = values.at(indexes[i]).value;
-					auto& lock = locks.at(indexes[i]);
-					const std::unique_lock guard {lock};
-					++value;
-				}
+				run_lock_test(per_thread, values.data(), indexes.data(), locks.data());
 			}
 
 		private:
 			std::vector<line> values;
-			std::vector<spinlock> locks;
+			std::vector<line> locks;
 		};
 
 		class atomic_test {
 		public:
-			struct alignas(64) line {
-				std::atomic_uint64_t value;
-			};
-
 			atomic_test() : values(cacheline_count) {}
 
 			void run(std::uint64_t per_thread, std::vector<std::uint64_t>& indexes)
 			{
-				for (auto i = 0ull; i < per_thread; ++i) {
-					auto& value = values.at(indexes[i]).value;
-					auto old = value.load(std::memory_order::memory_order_relaxed);
-					while (value.compare_exchange_strong(old, old + 1, std::memory_order::memory_order_relaxed))
-						_mm_pause();
-				}
+				run_atomic_test(per_thread, values.data(), indexes.data());
 			}
 
 		private:
@@ -108,18 +100,11 @@ namespace incrementer {
 
 		class null_test {
 		public:
-			struct alignas(64) line {
-				volatile std::uint64_t value;
-			};
-
 			null_test() : values(cacheline_count) {}
 
 			void run(std::uint64_t per_thread, std::vector<std::uint64_t>& indexes)
 			{
-				for (auto i = 0ull; i < per_thread; ++i) {
-					auto& value = values.at(indexes[i]).value;
-					++value;
-				}
+				run_null_test(per_thread, values.data(), indexes.data());
 			}
 
 		private:
