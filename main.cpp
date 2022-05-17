@@ -1,3 +1,4 @@
+#include <array>
 #include <atomic>
 #include <cassert>
 #include <cstdint>
@@ -23,7 +24,7 @@ namespace incrementer {
 
 		extern "C" std::uint64_t run_null_test(std::uint64_t iterations, line* values, const std::uint64_t* indices);
 		extern "C" std::uint64_t run_atomic_test(std::uint64_t iterations, line* values, const std::uint64_t* indices);
-		
+
 		extern "C" std::uint64_t
 		run_lock_test(std::uint64_t iterations, line* values, const std::uint64_t* indices, line* locks);
 
@@ -236,13 +237,6 @@ namespace incrementer {
 				   static_cast<double>(totals.atomic) / total_increments,
 				   static_cast<double>(totals.null) / total_increments};
 
-			// std::cout << "Spinlock took " << totals.spinlock << " cycles\n";
-			// std::cout << "Atomic took " << totals.atomic << " cycles\n";
-			// std::cout << "Null took " << totals.null << " cycles\n";
-			// std::cout << "Average spinlock: " << avg.spinlock << "\n";
-			// std::cout << "Average atomic: " << avg.atomic << "\n";
-			// std::cout << "Average null: " << avg.null << "\n";
-
 			return avg;
 		}
 	}
@@ -254,12 +248,16 @@ int main()
 
 	auto first = true;
 	std::cout << "{\n";
-	for (auto i = 0.0; i < 0.99; i += 0.05) {
+	constexpr std::array skews {0.2,  0.4,	0.6,  0.8,	0.81, 0.82, 0.83, 0.84, 0.85, 0.86, 0.87,
+								0.88, 0.89, 0.9,  0.91, 0.92, 0.93, 0.94, 0.95, 0.96, 0.97, 0.98,
+								0.99, 1.0,	1.01, 1.02, 1.03, 1.04, 1.05, 1.06, 1.07, 1.08, 1.09};
+								
+	for (auto skew : skews) {
 		if (!first)
 			std::cout << "," << std::endl;
 
-		const auto avg = run_test(i);
-		std::cout << "\t" << i << ": "
+		const auto avg = run_test(skew);
+		std::cout << "\t" << skew << ": "
 				  << "[" << avg.spinlock << ", " << avg.atomic << ", " << avg.null << "]";
 
 		first = false;
