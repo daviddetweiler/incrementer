@@ -15,18 +15,19 @@
 namespace incrementer {
 	namespace {
 		constexpr auto total_increments = 1ull << 28;
-		constexpr auto cacheline_count = 1ull << 16;
+		constexpr auto kebibyte = 1024ull;
+		constexpr auto dataset_size = 32ull * kebibyte * kebibyte;
+		constexpr auto cacheline_count = dataset_size / 64;
+		constexpr auto index_count = cacheline_count;
 		constexpr auto keyrange = cacheline_count; // 64ull * (1ull << 26);
 
 		struct alignas(64) line {
 			volatile std::uint64_t value;
+			volatile std::uint64_t lock;
 		};
 
-		extern "C" std::uint64_t run_null_test(std::uint64_t iterations, line* values, const std::uint64_t* indices);
-		extern "C" std::uint64_t run_atomic_test(std::uint64_t iterations, line* values, const std::uint64_t* indices);
-
-		extern "C" std::uint64_t
-		run_lock_test(std::uint64_t iterations, line* values, const std::uint64_t* indices, line* locks);
+		extern "C" void spin_lock(volatile std::uint64_t* lock);
+		extern "C" void spin_unlock(volatile std::uint64_t* lock);
 
 		static inline uint64_t RDTSC_START(void)
 		{
@@ -74,25 +75,31 @@ namespace incrementer {
 
 		class spinlock_test {
 		public:
-			spinlock_test() : values(cacheline_count), locks(cacheline_count) {}
+			spinlock_test() : values(cacheline_count) {}
 
-			void run(std::uint64_t per_thread, std::vector<std::uint64_t>& indexes)
+			void __attribute_noinline__ run(std::uint64_t per_thread, std::vector<std::uint64_t>& indexes)
 			{
-				run_lock_test(per_thread, values.data(), indexes.data(), locks.data());
+				for (auto i = 0ull; i < per_thread; ++i) {
+					const auto index = indexes[i & (index_count - 1)];
+					const auto lock_addr = &values[index].lock;
+					spin_lock(lock_addr);
+					asm volatile("incq (%0)" ::"r"(&values[index]));
+					spin_unlock(lock_addr);
+				}
 			}
 
 		private:
 			std::vector<line> values;
-			std::vector<line> locks;
 		};
 
 		class atomic_test {
 		public:
 			atomic_test() : values(cacheline_count) {}
 
-			void run(std::uint64_t per_thread, std::vector<std::uint64_t>& indexes)
+			void __attribute_noinline__ run(std::uint64_t per_thread, std::vector<std::uint64_t>& indexes)
 			{
-				run_atomic_test(per_thread, values.data(), indexes.data());
+				for (auto i = 0ull; i < per_thread; ++i)
+					asm volatile("lock addq $1, (%0)" ::"r"(&values[indexes[i & (index_count - 1)]]));
 			}
 
 		private:
@@ -103,9 +110,10 @@ namespace incrementer {
 		public:
 			null_test() : values(cacheline_count) {}
 
-			void run(std::uint64_t per_thread, std::vector<std::uint64_t>& indexes)
+			void __attribute_noinline__ run(std::uint64_t per_thread, std::vector<std::uint64_t>& indexes)
 			{
-				run_null_test(per_thread, values.data(), indexes.data());
+				for (auto i = 0ull; i < per_thread; ++i)
+					asm volatile("incq (%0)" ::"r"(&values[indexes[i & (index_count - 1)]]));
 			}
 
 		private:
@@ -141,8 +149,10 @@ namespace incrementer {
 			{
 				const auto responsible = id == 0;
 				const auto target = total_increments / participants;
-				std::vector<std::uint64_t> indexes(target);
+				std::vector<std::uint64_t> indexes(index_count);
 				zipf_distribution dist {skew, keyrange, id};
+				std::mt19937_64 engine {std::random_device {}()};
+				std::uniform_int_distribution<std::size_t> uni_dist {0, keyrange};
 				for (auto& n : indexes)
 					n = dist();
 
@@ -251,7 +261,7 @@ int main()
 	constexpr std::array skews {0.2,  0.4,	0.6,  0.8,	0.81, 0.82, 0.83, 0.84, 0.85, 0.86, 0.87,
 								0.88, 0.89, 0.9,  0.91, 0.92, 0.93, 0.94, 0.95, 0.96, 0.97, 0.98,
 								0.99, 1.0,	1.01, 1.02, 1.03, 1.04, 1.05, 1.06, 1.07, 1.08, 1.09};
-								
+
 	for (auto skew : skews) {
 		if (!first)
 			std::cout << "," << std::endl;

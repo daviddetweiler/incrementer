@@ -49,6 +49,11 @@
 		"algorithm": "cpp",
 		"iterator": "cpp",
 		"memory_resource": "cpp",
-		"random": "cpp"
+		"random": "cpp",
+		"compare": "cpp",
+		"concepts": "cpp",
+		"numbers": "cpp",
+		"semaphore": "cpp",
+		"stop_token": "cpp"
 	}
 }
