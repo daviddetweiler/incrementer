@@ -20,7 +20,7 @@ namespace incrementer {
 		constexpr auto kebibyte = 1024ull;
 		constexpr auto mib32 = kebibyte * kebibyte * 32ull;
 		constexpr auto gb1 = kebibyte * kebibyte * kebibyte;
-		constexpr auto dataset_size = gb1;
+		constexpr auto dataset_size = mib32;
 		constexpr auto cacheline_count = dataset_size / 64;
 		constexpr auto index_count = cacheline_count;
 		constexpr auto keyrange = cacheline_count; // 64ull * (1ull << 26);
@@ -172,9 +172,8 @@ namespace incrementer {
 				const auto responsible = id == 0;
 				const auto target = total_increments / participants;
 				std::vector<std::uint64_t> indexes(index_count);
-				zipf_distribution dist {skew, keyrange, id};
+				zipf_distribution dist {skew, keyrange - 1, id};
 				std::mt19937_64 engine {std::random_device {}()};
-				std::uniform_int_distribution<std::size_t> uni_dist {0, keyrange};
 				for (auto& n : indexes)
 					n = dist();
 
@@ -269,16 +268,16 @@ namespace incrementer {
 				return NULL;
 			};
 
-			cpu_set_t mask;
-			CPU_ZERO(&mask);
-			for (int i = 0; i < core_count; ++i)
-				CPU_SET(i, &mask);
-				
 			for (auto& thread : threads) {
 				datums[id - 1] = {&runner, &times[id], id};
 				pthread_attr_t attr;
 				pthread_attr_init(&attr);
+
+				cpu_set_t mask;
+				CPU_ZERO(&mask);
+				CPU_SET(id, &mask);
 				pthread_attr_setaffinity_np(&attr, sizeof(cpu_set_t), &mask);
+
 				if (pthread_create(&thread, NULL, tproc, &datums[id - 1]))
 					std::abort();
 
