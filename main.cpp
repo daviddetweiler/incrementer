@@ -10,13 +10,17 @@
 
 #include <x86intrin.h>
 
+#include <pthread.h>
+
 #include "zipf.h"
 
 namespace incrementer {
 	namespace {
 		constexpr auto total_increments = 1ull << 28;
 		constexpr auto kebibyte = 1024ull;
-		constexpr auto dataset_size = 32ull * kebibyte * kebibyte;
+		constexpr auto mib32 = kebibyte * kebibyte * 32ull;
+		constexpr auto gb1 = kebibyte * kebibyte * kebibyte;
+		constexpr auto dataset_size = gb1;
 		constexpr auto cacheline_count = dataset_size / 64;
 		constexpr auto index_count = cacheline_count;
 		constexpr auto keyrange = cacheline_count; // 64ull * (1ull << 26);
@@ -113,7 +117,7 @@ namespace incrementer {
 			void __attribute_noinline__ run(std::uint64_t per_thread, std::vector<std::uint64_t>& indexes)
 			{
 				for (auto i = 0ull; i < per_thread; ++i)
-					asm volatile("incq (%0)" ::"r"(&values[indexes[i & (index_count - 1)]]));
+					asm volatile("movq $1331, (%0)" ::"r"(&values[indexes[i & (index_count - 1)]]));
 			}
 
 		private:
@@ -225,21 +229,50 @@ namespace incrementer {
 			double null;
 		};
 
+		struct data {
+			test_runner* runner;
+			timings* time;
+			unsigned int id;
+		};
+
 		averages run_test(double skew)
 		{
 			static const auto core_count = std::thread::hardware_concurrency();
-			std::vector<std::thread> threads(core_count - 1);
+			std::vector<pthread_t> threads(core_count - 1);
+			std::vector<data> datums(core_count - 1);
 			std::vector<timings> times(core_count);
 
 			test_runner runner {skew, core_count};
 			auto id = 1u;
-			for (auto& thread : threads)
-				thread = std::thread {[&runner, &time = times[id++], id] { time = runner.run(id); }};
+			const auto tproc = [](void* data_ptr) -> void* {
+				const auto data = (struct data*)data_ptr;
+				*data->time = data->runner->run(data->id);
+				return NULL;
+			};
+
+			cpu_set_t mask;
+			CPU_ZERO(&mask);
+			constexpr auto max_id = 64;
+			for (int i = 0; i < max_id; ++i)
+				CPU_SET(i, &mask);
+				
+			for (auto& thread : threads) {
+				datums[id - 1] = {&runner, &times[id], id};
+				pthread_attr_t attr;
+				pthread_attr_init(&attr);
+				pthread_attr_setaffinity_np(&attr, sizeof(cpu_set_t), &mask);
+				if (pthread_create(&thread, NULL, tproc, &datums[id - 1]))
+					std::abort();
+
+				++id;
+			}
 
 			times.front() = runner.run(0);
 
-			for (auto& thread : threads)
-				thread.join();
+			for (const auto& thread : threads) {
+				if (pthread_join(thread, NULL))
+					std::abort();
+			}
 
 			const auto totals = std::accumulate(times.begin(), times.end(), timings {});
 			const averages avg
