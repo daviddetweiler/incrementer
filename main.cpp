@@ -124,6 +124,23 @@ namespace incrementer {
 			std::vector<line> values; // clunky
 		};
 
+		class fidget_spinner_test {
+		public:
+			fidget_spinner_test() : locks(64) {}
+
+			void __attribute_noinline__ run(std::uint64_t per_thread, unsigned int id)
+			{
+				auto& lock = locks[id];
+				for (auto i = 0ull; i < per_thread; ++i) {
+					spin_lock(&lock.lock);
+					spin_unlock(&lock.lock);
+				}
+			}
+
+		private:
+			std::vector<line> locks {};
+		};
+
 		struct timings {
 			std::uint64_t spinlock;
 			std::uint64_t atomic;
@@ -144,6 +161,7 @@ namespace incrementer {
 				done {},
 				start {},
 				spinlock {},
+				fidget {},
 				atomic {},
 				null {}
 			{
@@ -172,7 +190,7 @@ namespace incrementer {
 
 				const auto nl_time = synchronize(
 					participants,
-					[this, target, &indexes] { return null.run(target, indexes); },
+					[this, target, id] { return fidget.run(target, id); },
 					responsible);
 
 				return {sl_time, at_time, nl_time};
@@ -185,6 +203,7 @@ namespace incrementer {
 			std::atomic_uint64_t done;
 			std::atomic_bool start;
 			spinlock_test spinlock;
+			fidget_spinner_test fidget;
 			atomic_test atomic;
 			null_test null;
 
@@ -252,8 +271,7 @@ namespace incrementer {
 
 			cpu_set_t mask;
 			CPU_ZERO(&mask);
-			constexpr auto max_id = 64;
-			for (int i = 0; i < max_id; ++i)
+			for (int i = 0; i < core_count; ++i)
 				CPU_SET(i, &mask);
 				
 			for (auto& thread : threads) {
