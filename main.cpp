@@ -25,13 +25,56 @@ namespace incrementer {
 		constexpr auto index_count = cacheline_count;
 		constexpr auto keyrange = cacheline_count; // 64ull * (1ull << 26);
 
-		struct alignas(64) line {
-			volatile std::uint64_t value;
-			volatile std::uint64_t lock;
+		// Mutual exclusion lock.
+		struct spinlock {
+			uint locked; // Is the lock held?
 		};
 
-		extern "C" void spin_lock(volatile std::uint64_t* lock);
-		extern "C" void spin_unlock(volatile std::uint64_t* lock);
+		struct alignas(64) line {
+			volatile std::uint64_t value;
+			spinlock lock;
+		};
+
+		static inline uint xchg(volatile uint* addr, uint newval)
+		{
+			uint result;
+
+			// The + in "+m" denotes a read-modify-write operand.
+			asm volatile("lock; xchgl %0, %1" : "+m"(*addr), "=a"(result) : "1"(newval) : "cc");
+
+			return result;
+		}
+
+		// Check whether this cpu is holding the lock.
+		int holding(struct spinlock* lock) { return lock->locked; }
+
+		// Acquire the lock.
+		// Loops (spins) until the lock is acquired.
+		// Holding a lock for a long time may cause
+		// other CPUs to waste time spinning to acquire it.
+		void acquire(struct spinlock* lk)
+		{
+			// The xchg is atomic.
+			// It also serializes, so that reads after acquire are not
+			// reordered before it.
+			while (xchg(&lk->locked, 1) != 0)
+				;
+		}
+
+		// Release the lock.
+		void release(struct spinlock* lk)
+		{
+			// The xchg serializes, so that reads before release are
+			// not reordered after it.  The 1996 PentiumPro manual (Volume 3,
+			// 7.2) says reads can be carried out speculatively and in
+			// any order, which implies we need to serialize here.
+			// But the 2007 Intel 64 Architecture Memory Ordering White
+			// Paper says that Intel 64 and IA-32 will not move a load
+			// after a store. So lock->locked = 0 would work here.
+			// The xchg being asm volatile ensures gcc emits it after
+			// the above assignments (and after the critical section).
+			xchg(&lk->locked, 0);
+		}
 
 		static inline uint64_t RDTSC_START(void)
 		{
@@ -63,7 +106,7 @@ namespace incrementer {
 			return ((uint64_t)cycles_high << 32) | cycles_low;
 		}
 
-		class alignas(64) spinlock {
+		class alignas(64) _spinlock {
 		public:
 			void __attribute__((noinline)) lock()
 			{
@@ -86,9 +129,9 @@ namespace incrementer {
 				for (auto i = 0ull; i < per_thread; ++i) {
 					const auto index = indexes[i & (index_count - 1)];
 					const auto lock_addr = &values[index].lock;
-					spin_lock(lock_addr);
+					acquire(lock_addr);
 					asm volatile("incq (%0)" ::"r"(&values[index]));
-					spin_unlock(lock_addr);
+					release(lock_addr);
 				}
 			}
 
@@ -132,8 +175,8 @@ namespace incrementer {
 			{
 				auto& lock = locks[id];
 				for (auto i = 0ull; i < per_thread; ++i) {
-					spin_lock(&lock.lock);
-					spin_unlock(&lock.lock);
+					acquire(&lock.lock);
+					release(&lock.lock);
 				}
 			}
 
