@@ -20,10 +20,11 @@ namespace incrementer {
 		constexpr auto kebibyte = 1024ull;
 		constexpr auto mib32 = kebibyte * kebibyte * 32ull;
 		constexpr auto gb1 = kebibyte * kebibyte * kebibyte;
-		constexpr auto dataset_size = mib32;
-		constexpr auto cacheline_count = dataset_size / 64;
-		constexpr auto index_count = cacheline_count;
-		constexpr auto keyrange = cacheline_count; // 64ull * (1ull << 26);
+
+		std::uint64_t dataset_size {};
+		std::uint64_t cacheline_count {};
+		std::uint64_t index_count {};
+		std::uint64_t keyrange {};
 
 		// Mutual exclusion lock.
 		struct spinlock {
@@ -345,9 +346,15 @@ namespace incrementer {
 	}
 }
 
-int main()
+int main(int argc, char** argv)
 {
 	using namespace incrementer;
+
+	const auto large_arena = argc == 2 && std::strcmp(argv[1], "big") == 0;
+	dataset_size = large_arena ? gb1 : mib32;
+	cacheline_count = dataset_size / 64;
+	index_count = cacheline_count;
+	keyrange = cacheline_count; // 64ull * (1ull << 26);
 
 	auto first = true;
 	std::cout << "{\n";

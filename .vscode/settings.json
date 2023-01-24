@@ -1,5 +1,8 @@
 {
 	"files.associations": {
+		"*.nasm": "nasm",
+		"*.inc": "nasm",
+		"*.asm": "nasm",
 		"array": "cpp",
 		"atomic": "cpp",
 		"bit": "cpp",
@@ -54,6 +57,30 @@
 		"concepts": "cpp",
 		"numbers": "cpp",
 		"semaphore": "cpp",
-		"stop_token": "cpp"
+		"stop_token": "cpp",
+		"charconv": "cpp",
+		"cstring": "cpp",
+		"format": "cpp",
+		"forward_list": "cpp",
+		"iomanip": "cpp",
+		"ios": "cpp",
+		"locale": "cpp",
+		"map": "cpp",
+		"span": "cpp",
+		"xfacet": "cpp",
+		"xiosbase": "cpp",
+		"xlocale": "cpp",
+		"xlocbuf": "cpp",
+		"xlocinfo": "cpp",
+		"xlocmes": "cpp",
+		"xlocmon": "cpp",
+		"xlocnum": "cpp",
+		"xloctime": "cpp",
+		"xmemory": "cpp",
+		"xstddef": "cpp",
+		"xstring": "cpp",
+		"xtr1common": "cpp",
+		"xtree": "cpp",
+		"xutility": "cpp"
 	}
 }
