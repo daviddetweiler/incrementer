@@ -351,6 +351,7 @@ int main(int argc, char** argv)
 {
 	using namespace incrementer;
 
+	auto json = false;
 	const auto large_arena = argc == 2 && std::strcmp(argv[1], "big") == 0;
 	dataset_size = large_arena ? gb1 : mib32;
 	cacheline_count = dataset_size / 64;
@@ -358,7 +359,11 @@ int main(int argc, char** argv)
 	keyrange = cacheline_count; // 64ull * (1ull << 26);
 
 	auto first = true;
-	std::cout << "{\n";
+	if (json) {
+		std::cout << "{\n";
+	} else {
+		std::cout << "skew, spinlock, atomic, mov\n";
+	}
 	constexpr std::array skews {0.2,  0.4,	0.6,  0.8,	0.81, 0.82, 0.83, 0.84, 0.85, 0.86, 0.87,
 								0.88, 0.89, 0.9,  0.91, 0.92, 0.93, 0.94, 0.95, 0.96, 0.97, 0.98,
 								0.99, 1.0,	1.01, 1.02, 1.03, 1.04, 1.05, 1.06, 1.07, 1.08, 1.09};
@@ -368,11 +373,17 @@ int main(int argc, char** argv)
 			std::cout << "," << std::endl;
 
 		const auto avg = run_test(skew);
-		std::cout << "\t" << skew << ": "
-				  << "[" << avg.spinlock << ", " << avg.atomic << ", " << avg.null << "]";
+
+		if (json) {
+			std::cout << "\t" << skew << ": "
+				<< "[" << avg.spinlock << ", " << avg.atomic << ", " << avg.null << "]";
+		} else {
+			std::cout << skew << ", " << avg.spinlock << ", " << avg.atomic << ", " << avg.null;
+		}
 
 		first = false;
 	}
 
-	std::cout << "}\n";
+	if (json)
+		std::cout << "}\n";
 }
